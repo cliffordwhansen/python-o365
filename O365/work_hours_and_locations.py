@@ -1,5 +1,6 @@
 import datetime as dt
 import logging
+import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.parser import parse
@@ -107,6 +108,13 @@ class WorkPlanOccurrence(ApiComponent):
 class WorkHoursAndLocations(ApiComponent):
     """Read work-hours and location occurrences from Microsoft Graph."""
 
+    default_work_location_types = (
+        "unspecified",
+        "office",
+        "remote",
+        "timeOff",
+        "unknownFutureValue",
+    )
     occurrence_constructor = WorkPlanOccurrence  #: :meta private:
 
     def __init__(self, *, parent=None, con=None, **kwargs):
@@ -122,6 +130,7 @@ class WorkHoursAndLocations(ApiComponent):
             protocol=parent.protocol if parent else kwargs.get("protocol"),
             main_resource=main_resource,
         )
+        self._work_location_types_cache = None
 
     @staticmethod
     def _validate_datetime(value, name):
@@ -144,8 +153,63 @@ class WorkHoursAndLocations(ApiComponent):
         )
         return f"{self.protocol.service_url.rstrip('/')}{resource}{endpoint}"
 
+    @staticmethod
+    def _extract_work_location_type_members(metadata_xml):
+        if not metadata_xml:
+            return []
+
+        try:
+            root = ET.fromstring(metadata_xml)
+        except ET.ParseError:
+            return []
+
+        for enum_type in root.findall(".//{*}EnumType"):
+            if enum_type.attrib.get("Name") != "workLocationType":
+                continue
+            return [
+                member.attrib.get("Name")
+                for member in enum_type.findall("{*}Member")
+                if member.attrib.get("Name")
+            ]
+        return []
+
+    def get_valid_work_location_types(self, force_refresh=False):
+        """Return valid workLocationType values from Graph metadata.
+
+        Falls back to known Graph enum defaults when metadata is unavailable.
+        """
+        if self._work_location_types_cache is not None and not force_refresh:
+            return list(self._work_location_types_cache)
+
+        metadata_url = f"{self.protocol.service_url.rstrip('/')}/$metadata"
+        resolved_types = []
+
+        try:
+            response = self.con.get(metadata_url)
+            if response:
+                resolved_types = self._extract_work_location_type_members(
+                    getattr(response, "text", "")
+                )
+        except HTTPError as e:
+            log.debug(
+                "Could not read Graph metadata for workLocationType values. Error: %s",
+                e,
+            )
+
+        if not resolved_types:
+            resolved_types = list(self.default_work_location_types)
+
+        self._work_location_types_cache = tuple(resolved_types)
+        return list(self._work_location_types_cache)
+
     def occurrences_view(
-        self, start_datetime, end_datetime, user=None, top=None, select=None
+        self,
+        start_datetime,
+        end_datetime,
+        user=None,
+        top=None,
+        select=None,
+        include_valid_values=False,
     ):
         """Return work plan occurrences in a datetime range.
 
@@ -154,6 +218,7 @@ class WorkHoursAndLocations(ApiComponent):
         :param str user: optional user id/upn, defaults to /me when omitted
         :param int top: optional OData $top
         :param list[str] select: optional OData $select fields
+        :param bool include_valid_values: include valid workLocationType values on each item
         :rtype: list[WorkPlanOccurrence]
         """
         start_datetime = self._validate_datetime(start_datetime, "start_datetime")
@@ -178,6 +243,8 @@ class WorkHoursAndLocations(ApiComponent):
             ):
                 raise ValueError("'select' must be a list of strings")
             params["$select"] = ",".join(select)
+        if not isinstance(include_valid_values, bool):
+            raise ValueError("'include_valid_values' must be a boolean")
 
         try:
             response = self.con.get(url, params=params or None)
@@ -211,6 +278,9 @@ class WorkHoursAndLocations(ApiComponent):
             raise ValueError("Malformed response payload: 'value' must be a list")
 
         occurrences = []
+        valid_values = (
+            self.get_valid_work_location_types() if include_valid_values else None
+        )
         for index, item in enumerate(values):
             if not isinstance(item, dict):
                 raise ValueError(
@@ -218,9 +288,12 @@ class WorkHoursAndLocations(ApiComponent):
                 )
 
             try:
-                occurrences.append(
-                    self.occurrence_constructor(parent=self, **{self._cloud_data_key: item})
+                occurrence = self.occurrence_constructor(
+                    parent=self, **{self._cloud_data_key: item}
                 )
+                if valid_values is not None:
+                    occurrence.valid_work_location_types = list(valid_values)
+                occurrences.append(occurrence)
             except Exception as e:
                 raise ValueError(
                     f"Malformed occurrence payload at index {index}: {e}"
