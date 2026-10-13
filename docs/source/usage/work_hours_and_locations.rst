@@ -35,3 +35,21 @@ Example:
 
     for item in occurrences:
         print(item.object_id, item.work_location_type, item.start, item.end, item.time_zone)
+
+Getting valid ``workLocationType`` values
+""""""""""""""""""""""""""""""""""""""""""
+
+Microsoft Graph doesn't expose a dedicated enum endpoint, but the wrapper can resolve
+the values from Graph ``/$metadata`` and fallback to known defaults if metadata is unavailable.
+
+.. code-block:: python
+
+    valid_values = whl.get_valid_work_location_types()
+    print(valid_values)
+
+You can also attach these values to each returned occurrence object:
+
+.. code-block:: python
+
+    occurrences = whl.occurrences_view(start, end, include_valid_values=True)
+    print(occurrences[0].valid_work_location_types)
