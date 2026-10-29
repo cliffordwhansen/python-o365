@@ -14,6 +14,12 @@ log = logging.getLogger(__name__)
 class WorkPlanOccurrence(ApiComponent):
     """A work-hours and location occurrence returned by Microsoft Graph."""
 
+    windows_time_zone_fallbacks = {
+        # Some Windows mappings resolve to legacy IANA names that are not
+        # present in zoneinfo databases (e.g. US/Pacific-New).
+        "Pacific Standard Time": "America/Los_Angeles",
+    }
+
     def __init__(self, *, parent=None, con=None, **kwargs):
         if parent and con:
             raise ValueError("Need a parent or a connection but not both")
@@ -73,6 +79,12 @@ class WorkPlanOccurrence(ApiComponent):
                 try:
                     return get_iana_tz(time_zone_name)
                 except ZoneInfoNotFoundError:
+                    fallback_zone = self.windows_time_zone_fallbacks.get(time_zone_name)
+                    if fallback_zone:
+                        try:
+                            return ZoneInfo(fallback_zone)
+                        except ZoneInfoNotFoundError:
+                            pass
                     log.debug(
                         "TimeZone not found in IANA or Windows maps: %s. Using protocol timezone.",
                         time_zone_name,
@@ -249,7 +261,7 @@ class WorkHoursAndLocations(ApiComponent):
         try:
             response = self.con.get(url, params=params or None)
         except HTTPError as e:
-            status_code = e.response.status_code if e.response else None
+            status_code = e.response.status_code if e.response is not None else None
             if status_code in (403, 404):
                 message = (
                     "Work-hours endpoint is unavailable for this tenant/user "
