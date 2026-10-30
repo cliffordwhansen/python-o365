@@ -21,6 +21,16 @@ class WorkPlanOccurrence(ApiComponent):
     }
 
     def __init__(self, *, parent=None, con=None, **kwargs):
+        """A work-hours and location occurrence
+
+        :param parent: parent object
+        :type parent: Account
+        :param Connection con: connection to use if no parent specified
+        :param Protocol protocol: protocol to use if no parent specified
+         (kwargs)
+        :param str main_resource: use this resource instead of parent resource
+         (kwargs)
+        """
         if parent and con:
             raise ValueError("Need a parent or a connection but not both")
         self.con = parent.con if parent else con
@@ -37,12 +47,16 @@ class WorkPlanOccurrence(ApiComponent):
         cloud_data = kwargs.get(self._cloud_data_key, {})
         cc = self._cc
 
+        #: The unique id of the occurrence. |br| **Type:** str
         self.object_id = cloud_data.get(cc("id"))
         if not self.object_id:
             raise ValueError("Missing occurrence id")
+        #: Alias of object_id. |br| **Type:** str
         self.id = self.object_id
 
+        #: The id of the recurrence this occurrence belongs to. |br| **Type:** str
         self.recurrence_id = cloud_data.get(cc("recurrenceId"))
+        #: The work location type, e.g. office, remote, timeOff. |br| **Type:** str
         self.work_location_type = cloud_data.get(cc("workLocationType"), "")
 
         start_payload = cloud_data.get(cc("startDateTime")) or cloud_data.get(
@@ -50,18 +64,25 @@ class WorkPlanOccurrence(ApiComponent):
         )
         end_payload = cloud_data.get(cc("endDateTime")) or cloud_data.get(cc("end"))
 
+        #: The time zone of the occurrence. |br| **Type:** str
         self.time_zone = (
             cloud_data.get(cc("timeZone"))
             or self._extract_time_zone(start_payload)
             or self._extract_time_zone(end_payload)
         )
 
+        #: Start of the occurrence, in the protocol time zone. |br| **Type:** datetime
         self.start = self._parse_occurrence_datetime(start_payload, self.time_zone)
+        #: End of the occurrence, in the protocol time zone. |br| **Type:** datetime
         self.end = self._parse_occurrence_datetime(end_payload, self.time_zone)
 
+        #: The location details of the occurrence. |br| **Type:** dict
         self.location = cloud_data.get(cc("location")) or cloud_data.get(
             cc("workLocation")
         )
+
+        #: Valid workLocationType values; populated when include_valid_values is requested. |br| **Type:** list[str]
+        self.valid_work_location_types = None
 
         if self.start is None or self.end is None:
             raise ValueError("Occurrence is missing a valid start or end datetime")
@@ -120,6 +141,7 @@ class WorkPlanOccurrence(ApiComponent):
 class WorkHoursAndLocations(ApiComponent):
     """Read work-hours and location occurrences from Microsoft Graph."""
 
+    #: Fallback workLocationType values used when Graph metadata is unavailable. |br| **Type:** tuple[str]
     default_work_location_types = (
         "unspecified",
         "office",
@@ -130,6 +152,16 @@ class WorkHoursAndLocations(ApiComponent):
     occurrence_constructor = WorkPlanOccurrence  #: :meta private:
 
     def __init__(self, *, parent=None, con=None, **kwargs):
+        """Object to retrieve work-hours and location occurrences
+
+        :param parent: parent object
+        :type parent: Account
+        :param Connection con: connection to use if no parent specified
+        :param Protocol protocol: protocol to use if no parent specified
+         (kwargs)
+        :param str main_resource: use this resource instead of parent resource
+         (kwargs)
+        """
         if parent and con:
             raise ValueError("Need a parent or a connection but not both")
         self.con = parent.con if parent else con
